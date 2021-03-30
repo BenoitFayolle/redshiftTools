@@ -66,7 +66,7 @@ rs_move_table = function(
       return(FALSE)
     }
     ddl_statement <- ddl %>% {paste(.$ddl,collapse="")}
-    ddl_statement <- gsub(paste0(schema_from,'."',table_name,'"'),
+    ddl_statement <- gsub(paste0(schema_from,'."?',table_name,'"?'),
                           paste0(schema_to,'."',table_name,'"'),
                           ddl_statement)
     message(paste("creating table with following ddl\n",ddl_statement))
