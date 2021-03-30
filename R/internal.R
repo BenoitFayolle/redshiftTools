@@ -82,7 +82,8 @@ unloadToS3 <- function(table_name,schema , bucket, dbcon, key, secret, session, 
 #' @importFrom "purrr" "map"
 deletePrefix = function(prefix, bucket, split_files, key, secret, session, region){
 
-  s3Names = get_bucket_df(bucket,prefix,region=region) %>% filter(grepl(prefix,Key)) %>% {.$Key}
+  s3Names = get_bucket_df(bucket,prefix,key=key,secret=secret,region=region, session=session) %>%
+    filter(grepl(prefix,Key)) %>% {.$Key}
   message(paste("Deleting", split_files, "files with prefix", prefix, "from bucket", bucket))
 
   # pb <- progress_bar$new(total = split_files, format='Deleting file :current/:total [:bar]')

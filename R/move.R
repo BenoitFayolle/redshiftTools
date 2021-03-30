@@ -66,6 +66,9 @@ rs_move_table = function(
       return(FALSE)
     }
     ddl_statement <- ddl %>% {paste(.$ddl,collapse="")}
+    ddl_statement <- gsub(paste0(schema_from,'."',table_name,'"'),
+                          paste0(schema_to,'."',table_name,'"'),
+                          ddl_statement)
     message(paste("creating table with following ddl\n",ddl_statement))
     ddl_res <- strsplit(x=ddl_statement,split=";")[[1]] %>% map(function(x){dbExecute(dbcon_to,x)})
   }
@@ -89,7 +92,7 @@ rs_move_table = function(
   message(paste0("The provided data.frame has ", numRows, ' rows '))
 
 
-  # Unload tabke to S3
+  # Unload table to S3
   prefix = unloadToS3(table_name,schema_from, bucket, dbcon_from, access_key, secret_key, session_token, region)
 
   if(wlm_slots>1){
