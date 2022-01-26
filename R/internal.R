@@ -6,7 +6,7 @@ if(getRversion() >= "2.15.1")  utils::globalVariables(c("i", "obj"))
 #' @importFrom "readr" "format_csv"
 #' @importFrom "purrr" "map2"
 #' @importFrom "progress" "progress_bar"
-uploadToS3 = function(data, bucket, split_files, key, secret, session, region){
+uploadToS3 = function(data, bucket, split_files){
 
   prefix = paste0(sample(rep(letters, 10),50), collapse = "")
 
@@ -63,52 +63,15 @@ uploadToS3 = function(data, bucket, split_files, key, secret, session, region){
   }
 }
 
-#' @importFrom "aws.s3" "bucket_exists"
-#' @importFrom "glue" "glue"
-unloadToS3 <- function(table_name,schema , bucket, dbcon, key, secret, session, region){
-
-  prefix=paste0(sample(rep(letters, 10),50),collapse = "")
-  if(!bucket_exists(bucket, key=key, secret=secret, session=session, region=region)){
-    stop("Bucket does not exist")
-  }
-
-
-  # pb <- progress_bar$new(total = split_files, format='Unloading file :current/:total [:bar]')
-  # pb$tick(0)
-
-  s3Name=paste0("s3://",bucket, "/", prefix)
-  statement <- glue("unload ('select * from {schema}.{table_name}')
-                  to '{s3Name}'
-                  ACCESS_KEY_ID '{key}'
-                  SECRET_ACCESS_KEY '{secret}'
-                  SESSION_TOKEN '{session}'
-                  FORMAT AS CSV
-                  GZIP
-                  PARALLEL OFF
-                  MAXFILESIZE 100 MB
-                  ")
-  res <- dbExecute(dbcon,statement)
-
-  if(res!=0){
-    warning("Error uploading data!")
-    return(NA)
-  }else{
-    message("Upload to S3 complete!")
-    return(prefix)
-  }
-}
-
-
-#' @importFrom "aws.s3" "delete_object" "get_bucket_df"
 #' @importFrom "purrr" "map"
-deletePrefix = function(prefix, bucket, split_files, key, secret, session, region){
+deletePrefix = function(prefix, bucket, split_files){
 
-  s3Names = get_bucket_df(bucket,prefix,key=key,secret=secret,region=region, session=session) %>%
-    filter(grepl(prefix,Key)) %>% {.$Key}
+  s3Names=paste(prefix, ".", formatC(1:split_files, width = 4, format = "d", flag = "0"), sep="")
+
   message(paste("Deleting", split_files, "files with prefix", prefix, "from bucket", bucket))
 
-  # pb <- progress_bar$new(total = split_files, format='Deleting file :current/:total [:bar]')
-  # pb$tick(0)
+  pb <- progress_bar$new(total = split_files, format='Deleting file :current/:total [:bar]')
+  pb$tick(0)
 
   deleteObj = function(key){
 
@@ -135,6 +98,56 @@ deletePrefix = function(prefix, bucket, split_files, key, secret, session, regio
 
   res = map(s3Names, deleteObj)
 }
+
+#' @importFrom "aws.s3" "bucket_exists"
+unloadToS3 <- function(table_name, schema, bucket, dbcon, access_key, secret_key, session, iam_role_arn){
+
+  prefix=paste0(sample(rep(letters, 10),50),collapse = "")
+
+  resp <- bucket_exists(bucket)
+  if(is.null(attributes(resp))) {
+    # Do nothing
+  } else if(attributes(resp)$status_code %in% 404){
+    stop("Bucket does not exist")
+  } else if(attributes(resp)$status_code %in% 403) {
+    stop("Access denied; please check AWS credentials")
+  }
+
+  # pb <- progress_bar$new(total = split_files, format='Unloading file :current/:total [:bar]')
+  # pb$tick(0)
+  copyStr = "unload (%s)
+    TO '%s'
+    %s
+    GZIP
+    PARALLEL OFF
+    MAXFILESIZE 100 MB"
+
+  select_statement <- sprintf("'select * from %s.%s'",schema,table_name)
+
+  s3Name=paste0("s3://",bucket, "/", prefix)
+
+  if (!missing(iam_role_arn)) {
+    credsStr = sprintf("iam_role '%s'", iam_role_arn)
+  } else {
+    # creds string now includes a token in case it is needed.
+    if (missing(session)) {
+      credsStr = sprintf("aws_access_key_id=%s;aws_secret_access_key=%s;token=%s", access_key, secret_key, session)
+    } else {
+      credsStr = sprintf("aws_access_key_id=%s;aws_secret_access_key=%s", access_key, secret_key)
+    }
+  }
+
+  statement <- glue("unload ()
+                  to '{s3Name}'
+                  GZIP
+                  PARALLEL OFF
+                  MAXFILESIZE 100 MB
+                  ")
+  statement = sprintf(copyStr, select_statement, s3Name, credsStr)
+  res <- queryStmt(dbcon, statement)
+  return(prefix)
+}
+
 
 #' @importFrom DBI dbGetQuery
 queryDo = function(dbcon, query){
@@ -171,17 +184,17 @@ splitDetermine = function(dbcon, numRows, rowSize){
   return(split_files)
 }
 
-s3ToRedshift = function(dbcon, table_name, bucket, prefix, region, access_key, secret_key, session, iam_role_arn, additional_params,is_gz=F){
+s3ToRedshift = function(dbcon, table_name, bucket, prefix, region, access_key, secret_key, session, iam_role_arn, additional_params, is_gz=F){
   stageTable=paste0(sample(letters,16),collapse = "")
   # Create temporary table for staging data
   queryStmt(dbcon, sprintf("create temp table %s (like %s)", stageTable, table_name))
   if (is_gz)
     copyStr = "copy %s from 's3://%s/%s' region '%s' csv gzip ignoreheader 1 emptyasnull COMPUPDATE FALSE STATUPDATE FALSE %s %s"
   else
-    copyStr = "copy %s from 's3://%s/%s.' region '%s' csv gzip ignoreheader 1 emptyasnull COMPUPDATE FALSE STATUPDATE FALSE %s %s"
+    copyStr = "copy %s from 's3://%s/%s.' region '%s' csv ignoreheader 1 emptyasnull COMPUPDATE FALSE STATUPDATE FALSE %s %s"
 
   # Use IAM Role if available
-  if (nchar(iam_role_arn) > 0) {
+  if (!missing(iam_role_arn)) {
     credsStr = sprintf("iam_role '%s'", iam_role_arn)
   } else {
     # creds string now includes a token in case it is needed.
@@ -197,31 +210,17 @@ s3ToRedshift = function(dbcon, table_name, bucket, prefix, region, access_key, s
   return(stageTable)
 }
 
-#' @importFrom paws s3
-bucket_exists <- function(bucket) {
 
-  svc <- s3(
-       config = list(
-         credentials = list(
-           creds = list(
-             access_key_id     = Sys.getenv('AWS_ACCESS_KEY_ID'),
-             secret_access_key = Sys.getenv('AWS_SECRET_ACCESS_KEY'),
-             session_token     = Sys.getenv('AWS_SESSION_TOKEN')
-            )
-          ),
-         region = Sys.getenv('AWS_DEFAULT_REGION')
-       )
-     )
-
-  response <- tryCatch(svc$head_bucket(bucket), error = function(e) e)
-
-  return(response)
-}
-
-#' @importFrom paws s3
-object_exists <- function(bucket, key) {
-
-  svc <- s3(
+retrieve_paws_config <- function(){
+  is_sso_enabled <- file.exists("~/.aws/config") # should find a better way to know if sso is enabled
+  if (is_sso_enabled) {
+    config = list(
+      credentials = list (
+        profile = Sys.getenv("AWS_PROFILE")
+      ),
+      region = Sys.getenv('AWS_DEFAULT_REGION')
+    )
+  } else {
     config = list(
       credentials = list(
         creds = list(
@@ -232,7 +231,26 @@ object_exists <- function(bucket, key) {
       ),
       region = Sys.getenv('AWS_DEFAULT_REGION')
     )
-  )
+  }
+}
+
+
+#' @importFrom paws s3
+bucket_exists <- function(bucket) {
+  config <- retrieve_paws_config()
+
+  svc <- s3(config)
+
+  response <- tryCatch(svc$head_bucket(bucket), error = function(e) e)
+
+  return(response)
+}
+
+#' @importFrom paws s3
+object_exists <- function(bucket, key) {
+  config <- retrieve_paws_config()
+
+  svc <- s3(config)
 
   response <- tryCatch(
     expr = svc$head_object(Bucket = bucket, Key = key),
@@ -249,18 +267,8 @@ delete_object <- function(bucket, key) {
     stop("Object does not exist in the target bucket")
   }
 
-  svc <- s3(
-    config = list(
-      credentials = list(
-        creds = list(
-          access_key_id     = Sys.getenv('AWS_ACCESS_KEY_ID'),
-          secret_access_key = Sys.getenv('AWS_SECRET_ACCESS_KEY'),
-          session_token     = Sys.getenv('AWS_SESSION_TOKEN')
-        )
-      ),
-      region = Sys.getenv('AWS_DEFAULT_REGION')
-    )
-  )
+  config <- retrieve_paws_config()
+  svc <- s3(config)
 
   response <- tryCatch(
     expr = svc$delete_object(Bucket = bucket, Key = key),
@@ -274,18 +282,8 @@ delete_object <- function(bucket, key) {
 #' @importFrom readr format_csv
 put_object <- function(.data, bucket, key) {
 
-  svc <- s3(
-    config = list(
-      credentials = list(
-        creds = list(
-          access_key_id     = Sys.getenv('AWS_ACCESS_KEY_ID'),
-          secret_access_key = Sys.getenv('AWS_SECRET_ACCESS_KEY'),
-          session_token     = Sys.getenv('AWS_SESSION_TOKEN')
-        )
-      ),
-      region = Sys.getenv('AWS_DEFAULT_REGION')
-    )
-  )
+  config <- retrieve_paws_config()
+  svc <- s3(config)
 
   response <- tryCatch(
     expr = .data %>%
