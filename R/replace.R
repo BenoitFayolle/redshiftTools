@@ -54,22 +54,23 @@ rs_replace_table = function(
     return(FALSE)
   }
   numRows = nrow(df)
+  numCols = ncol(df)
 
   if(numRows == 0){
     warning("Empty dataset provided, will not try uploading")
     return(FALSE)
   }
 
-  message(paste0("The provided data.frame has ", numRows, ' rows'))
+  message(paste0("The provided data.frame has ", numRows, ' rows and ', numCols, ' columns'))
 
 
   if(missing(split_files)){
-    split_files = splitDetermine(dbcon)
+    split_files = splitDetermine(dbcon, numRows, (as.numeric(object.size(df))/nrow(df)))
   }
   split_files = pmin(split_files, numRows)
 
   # Upload data to S3
-  prefix = uploadToS3(df, bucket, split_files, access_key, secret_key, session_token, region)
+  prefix = uploadToS3(df, bucket, split_files)
 
   if(wlm_slots>1){
     queryStmt(dbcon,paste0("set wlm_query_slot_count to ", wlm_slots));
@@ -100,7 +101,7 @@ rs_replace_table = function(
       return(FALSE)
   }, finally = {
     message("Deleting temporary files from S3 bucket")
-    deletePrefix(prefix, bucket, split_files, access_key, secret_key, session_token, region)
+    deletePrefix(prefix, bucket, split_files)
   })
 
   return (result)

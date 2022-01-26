@@ -53,23 +53,24 @@ rs_upsert_table = function(
     )
   {
 
-  message('Initiating Redshift table upsert for table ',table_name)
+  message('Initiating Redshift table upsert for table ', table_name)
 
   if(!inherits(df, 'data.frame')){
     warning("The df parameter must be a data.frame or an object compatible with it's interface")
     return(FALSE)
   }
   numRows = nrow(df)
+  numCols = ncol(df)
 
   if(numRows == 0){
     warning("Empty dataset provided, will not try uploading")
     return(FALSE)
   }
 
-  message(paste0("The provided data.frame has ", numRows, ' rows'))
+  message(paste0("The provided data.frame has ", numRows, ' rows and ', numCols, ' columns'))
 
   if(missing(split_files)){
-    split_files = splitDetermine(dbcon)
+    split_files = splitDetermine(dbcon, numRows, (as.numeric(object.size(df))/nrow(df)))
   }
   split_files = pmin(split_files, numRows)
 
